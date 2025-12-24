@@ -538,46 +538,63 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// ============ 优雅关闭 ============
-let isShuttingDown = false;
+// ============ Vercel 无服务器适配 ============
+// 关键修改：将原来的监听启动逻辑，改为条件化启动
+// 1. 判断当前是否是被直接运行 (node server.js)
+// 2. 如果是，则启动服务器（用于本地测试）
+// 3. 否则，不启动服务器，仅导出 app 供 Vercel 函数使用
 
-const server = app.listen(PORT, () => {
-  console.log(`\n🎄 R2 Proxy Server (High Concurrency Edition)`);
-  console.log(`   Port: ${PORT}`);
-  console.log(`   Bucket: ${R2_CONFIG.bucketName}`);
-  console.log(`   Cache: ${shareCache.maxSize} items, ${shareCache.ttlMs / 1000}s TTL`);
-  console.log(`   Rate Limit: ${RATE_LIMIT.maxRequests} req/min, ${RATE_LIMIT.maxUploads} uploads/min`);
-  console.log(`   Max Connections: ${httpsAgent.maxSockets}\n`);
-});
+if (require.main === module) {
+  // 只有通过命令行直接运行（如 `node server.js`）才会进入这里
+  let isShuttingDown = false;
 
-// 设置服务器超时
-server.keepAliveTimeout = 65000;
-server.headersTimeout = 66000;
-
-function gracefulShutdown(signal) {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-  
-  console.log(`\n[${signal}] Graceful shutdown started...`);
-  
-  // 停止接受新连接
-  server.close(() => {
-    console.log('[SHUTDOWN] HTTP server closed');
-    
-    // 清理资源
-    httpsAgent.destroy();
-    shareCache.clear();
-    
-    console.log('[SHUTDOWN] Complete');
-    process.exit(0);
+  const server = app.listen(PORT, () => {
+    console.log(`\n🎄 R2 Proxy Server (High Concurrency Edition)`);
+    console.log(`   Port: ${PORT}`);
+    console.log(`   Bucket: ${R2_CONFIG.bucketName}`);
+    console.log(`   Cache: ${shareCache.maxSize} items, ${shareCache.ttlMs / 1000}s TTL`);
+    console.log(`   Rate Limit: ${RATE_LIMIT.maxRequests} req/min, ${RATE_LIMIT.maxUploads} uploads/min`);
+    console.log(`   Max Connections: ${httpsAgent.maxSockets}\n`);
   });
+
+  // 设置服务器超时
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
+
+  function gracefulShutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    
+    console.log(`\n[${signal}] Graceful shutdown started...`);
+    
+    // 停止接受新连接
+    server.close(() => {
+      console.log('[SHUTDOWN] HTTP server closed');
+      
+      // 清理资源
+      httpsAgent.destroy();
+      shareCache.clear();
+      
+      console.log('[SHUTDOWN] Complete');
+      process.exit(0);
+    });
+    
+    // 强制退出超时
+    setTimeout(() => {
+      console.error('[SHUTDOWN] Forced exit after timeout');
+      process.exit(1);
+    }, 30000);
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
   
-  // 强制退出超时
-  setTimeout(() => {
-    console.error('[SHUTDOWN] Forced exit after timeout');
-    process.exit(1);
-  }, 30000);
+} else {
+  // 当这个文件是被其他模块导入时（比如被 api/index.js 导入），会进入这里
+  console.log('R2 Proxy Server app exported for Vercel Serverless Function.');
 }
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+// ============ 关键：导出 app 对象 ============
+// 无论哪种情况，都必须将 Express 应用实例导出
+// 这样 Vercel 的函数适配器 (api/index.js) 才能使用它
+module.exports = app;
