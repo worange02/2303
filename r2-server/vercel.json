@@ -1,13 +1,15 @@
 {
-  "rewrites": [
+  "version": 2,
+  "builds": [
     {
-      "source": "/(.*)",
-      "destination": "/server.js"
+      "src": "package.json",
+      "use": "@vercel/node"
     }
   ],
-  "functions": {
-    "server.js": {
-      "maxDuration": 10
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/"
     }
-  }
+  ]
 }
